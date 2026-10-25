@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Río Inteligente - Monitoreo de Calidad del Agua | UNEMI</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Paho MQTT WebSockets -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Plus Jakarta Sans', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0284c7',
+                            600: '#0369a1',
+                            700: '#075985',
+                            900: '#0c4a6e',
+                        },
+                        eco: {
+                            500: '#10b981',
+                            600: '#059669',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #f8fafc;
+            color: #0f172a;
+        }
+        .glass-card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
+        }
+        .gauge-cover {
+            stroke-dasharray: 440;
+            stroke-dashoffset: 440;
+            transition: stroke-dashoffset 1s ease-in-out, stroke 0.5s ease;
+        }
+        canvas#fluidBg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 0;
+            opacity: 0.6;
+        }
+    </style>
+</head>
+<body class="relative min-h-screen font-sans antialiased pb-12 selection:bg-brand-500 selection:text-white">
+
+    <!-- Fondo de Partículas Fluidas -->
+    <canvas id="fluidBg"></canvas>
+
+    <div class="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+        
+        <!-- Header / Barra Superior -->
+        <header class="glass-card rounded-2xl p-5 mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl bg-gradient-to-tr from-brand-600 to-teal-400 flex items-center justify-center text-white shadow-md shadow-brand-500/20">
+                    <i class="fa-solid fa-water text-2xl"></i>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-2xl font-extrabold text-slate-800 tracking-tight">RÍO INTELIGENTE</h1>
+                        <span class="bg-brand-100 text-brand-700 text-xs font-bold px-2.5 py-0.5 rounded-full border border-brand-200">GRUPO 7</span>
+                    </div>
+                    <p class="text-xs text-slate-500 font-medium">Modelización y Matemáticas Aplicadas • Universidad Estatal de Milagro (UNEMI)</p>
+                </div>
+            </div>
+
+            <!-- Estado de Conexión y Opciones -->
+            <div class="flex items-center gap-3 flex-wrap justify-end">
+                <div id="mqttStatus" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-xs font-semibold">
+                    <span class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping"></span>
+                    <span id="mqttStatusText">Conectando a Broker...</span>
+                </div>
+
+                <label class="inline-flex items-center cursor-pointer bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-200 transition">
+                    <input type="checkbox" id="simToggle" class="sr-only peer" onchange="toggleSimulación()">
+                    <div class="relative w-8 h-4 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-brand-600"></div>
+                    <span class="ms-2">Simulador</span>
+                </label>
+            </div>
+        </header>
+
+        <!-- Selector de Zonas -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+            <button onclick="seleccionarZona(0)" id="btnZona0" class="glass-card p-4 rounded-xl border-l-4 border-brand-500 text-left transition-all hover:shadow-md relative overflow-hidden group">
+                <div class="flex justify-between items-center">
+                    <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Punto de Muestreo 1</span>
+                    <span id="badgeZ0" class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600">Sin evaluar</span>
+                </div>
+                <h3 class="text-lg font-bold text-slate-800 mt-1">Zona 1 (Alta)</h3>
+                <p class="text-xs text-slate-500 mt-0.5">Cabecera del río / Subcuenca limpia</p>
+            </button>
+
+            <button onclick="seleccionarZona(1)" id="btnZona1" class="glass-card p-4 rounded-xl border-l-4 border-slate-300 text-left transition-all hover:shadow-md relative overflow-hidden group opacity-75">
+                <div class="flex justify-between items-center">
+                    <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Punto de Muestreo 2</span>
+                    <span id="badgeZ1" class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600">Sin evaluar</span>
+                </div>
+                <h3 class="text-lg font-bold text-slate-800 mt-1">Zona 2 (Media)</h3>
+                <p class="text-xs text-slate-500 mt-0.5">Tramo Urbano - Milagro (UNEMI)</p>
+            </button>
+
+            <button onclick="seleccionarZona(2)" id="btnZona2" class="glass-card p-4 rounded-xl border-l-4 border-slate-300 text-left transition-all hover:shadow-md relative overflow-hidden group opacity-75">
+                <div class="flex justify-between items-center">
+                    <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Punto de Muestreo 3</span>
+                    <span id="badgeZ2" class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600">Sin evaluar</span>
+                </div>
+                <h3 class="text-lg font-bold text-slate-800 mt-1">Zona 3 (Baja)</h3>
+                <p class="text-xs text-slate-500 mt-0.5">Desembocadura / Descargas agroindustriales</p>
+            </button>
+        </div>
+
+        <!-- Grid Principal Dashboard -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
+            
+            <!-- Gauge Central ICA -->
+            <div class="glass-card rounded-2xl p-6 flex flex-col items-center justify-between text-center relative">
+                <div class="w-full flex justify-between items-center mb-2">
+                    <h2 class="text-sm font-bold text-slate-600 uppercase tracking-wider">Índice ICA (Modelo Ponderado)</h2>
+                    <i class="fa-solid fa-circle-info text-slate-400 hover:text-brand-500 cursor-pointer" title="Calculado en base a pH (25%), Turbidez (37.5%) y TDS (37.5%)"></i>
+                </div>
+
+                <!-- Gauge Circular SVG -->
+                <div class="relative w-56 h-56 my-2 flex items-center justify-center">
+                    <svg class="w-full h-full -rotate-90 transform" viewBox="0 0 160 160">
+                        <circle cx="80" cy="80" r="70" stroke="#f1f5f9" stroke-width="14" fill="transparent" />
+                        <circle id="gaugeArc" class="gauge-cover" cx="80" cy="80" r="70" stroke="#0284c7" stroke-width="14" stroke-linecap="round" fill="transparent" />
+                    </svg>
+                    <div class="absolute flex flex-col items-center justify-center">
+                        <span id="valICA" class="text-5xl font-extrabold text-slate-800 tracking-tight">--</span>
+                        <span id="lblICA" class="text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-slate-100 text-slate-600 mt-2">Esperando datos</span>
+                    </div>
+                </div>
+
+                <!-- Semáforo LED Físico Simulado -->
+                <div class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-around mt-4">
+                    <div class="flex items-center gap-2">
+                        <span id="ledVerde" class="w-4 h-4 rounded-full bg-slate-300 transition-all duration-300"></span>
+                        <span class="text-xs font-semibold text-slate-600">Normal</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span id="ledAmarillo" class="w-4 h-4 rounded-full bg-slate-300 transition-all duration-300"></span>
+                        <span class="text-xs font-semibold text-slate-600">Alerta</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span id="ledRojo" class="w-4 h-4 rounded-full bg-slate-300 transition-all duration-300"></span>
+                        <span class="text-xs font-semibold text-slate-600">Crítico</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sensores en Tiempo Real -->
+            <div class="lg:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                
+                <!-- Sensor pH -->
+                <div class="glass-card p-5 rounded-2xl flex flex-col justify-between">
+                    <div>
+                        <div class="flex justify-between items-center mb-3">
+                            <span class="text-xs font-bold text-slate-400 uppercase">PH-4502C</span>
+                            <span class="p-2 rounded-lg bg-emerald-50 text-emerald-600 text-sm"><i class="fa-solid fa-flask"></i></span>
+                        </div>
+                        <h4 class="text-sm font-bold text-slate-700">Potencial de Hidrógeno</h4>
+                        <div class="text-3xl font-extrabold text-slate-800 mt-2 mb-1" id="valPH">--</div>
+                        <p class="text-[11px] text-slate-500">Rango Óptimo TULSMA: 6.5 - 9.0</p>
+                    </div>
+                    <div class="mt-4">
+                        <div class="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                            <div id="barPH" class="bg-emerald-500 h-full w-0 transition-all duration-500"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sensor Turbidez -->
+                <div class="glass-card p-5 rounded-2xl flex flex-col justify-between">
+                    <div>
+                        <div class="flex justify-between items-center mb-3">
+                            <span class="text-xs font-bold text-slate-400 uppercase">Turbidez V1.0</span>
+                            <span class="p-2 rounded-lg bg-cyan-50 text-cyan-600 text-sm"><i class="fa-solid fa-droplet"></i></span>
+                        </div>
+                        <h4 class="text-sm font-bold text-slate-700">Turbidez del Agua</h4>
+                        <div class="text-3xl font-extrabold text-slate-800 mt-2 mb-1"><span id="valTurb">--</span> <span class="text-xs font-normal text-slate-500">NTU</span></div>
+                        <p class="text-[11px] text-slate-500">Límite OMS: &lt; 50.0 NTU</p>
+                    </div>
+                    <div class="mt-4">
+                        <div class="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                            <div id="barTurb" class="bg-cyan-500 h-full w-0 transition-all duration-500"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sensor TDS -->
+                <div class="glass-card p-5 rounded-2xl flex flex-col justify-between">
+                    <div>
+                        <div class="flex justify-between items-center mb-3">
+                            <span class="text-xs font-bold text-slate-400 uppercase">TDS Meter V1.0</span>
+                            <span class="p-2 rounded-lg bg-indigo-50 text-indigo-600 text-sm"><i class="fa-solid fa-cube"></i></span>
+                        </div>
+                        <h4 class="text-sm font-bold text-slate-700">Sólidos Disueltos</h4>
+                        <div class="text-3xl font-extrabold text-slate-800 mt-2 mb-1"><span id="valTDS">--</span> <span class="text-xs font-normal text-slate-500">ppm</span></div>
+                        <p class="text-[11px] text-slate-500">Límite OMS: &lt; 500 ppm</p>
+                    </div>
+                    <div class="mt-4">
+                        <div class="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                            <div id="barTDS" class="bg-indigo-500 h-full w-0 transition-all duration-500"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Diagnóstico Ambiental Integrado -->
+                <div class="sm:col-span-3 glass-card p-5 rounded-2xl bg-gradient-to-r from-slate-50 to-brand-50/30 border border-slate-200">
+                    <h3 class="text-sm font-bold text-slate-800 mb-2 flex items-center gap-2">
+                        <i class="fa-solid fa-clipboard-check text-brand-600"></i>
+                        Evaluación Técnica de Calidad Ambiental (Normativa TULSMA / OMS)
+                    </h3>
+                    <p id="diagTexto" class="text-xs text-slate-600 leading-relaxed">
+                        Seleccione una zona o envíe lecturas desde la estación de monitoreo para desplegar el informe situacional del cauce hidrológico.
+                    </p>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Gráfico Temporal y Tabla de Históricos -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <!-- Gráfico Chart.js -->
+            <div class="lg:col-span-2 glass-card p-6 rounded-2xl">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-sm font-bold text-slate-700 uppercase tracking-wider">Evolución Temporal de Parámetros</h3>
+                    <span class="text-xs text-slate-400">Últimas 10 mediciones</span>
+                </div>
+                <div class="h-64">
+                    <canvas id="chartEvolucion"></canvas>
+                </div>
+            </div>
+
+            <!-- Tabla Registros con Exportación -->
+            <div class="glass-card p-6 rounded-2xl flex flex-col justify-between">
+                <div>
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-sm font-bold text-slate-700 uppercase tracking-wider">Bitácora de Mediciones</h3>
+                        <button onclick="exportarCSV()" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1 rounded-lg font-semibold transition border border-slate-200">
+                            <i class="fa-solid fa-download mr-1"></i> CSV
+                        </button>
+                    </div>
+                    <div class="overflow-y-auto max-h-56">
+                        <table class="w-full text-left text-xs">
+                            <thead class="bg-slate-50 text-slate-500 border-b border-slate-200 sticky top-0">
+                                <tr>
+                                    <th class="p-2">Zona</th>
+                                    <th class="p-2">pH</th>
+                                    <th class="p-2">NTU</th>
+                                    <th class="p-2">ICA</th>
+                                    <th class="p-2">Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tablaCuerpo" class="divide-y divide-slate-100 text-slate-700">
+                                <tr>
+                                    <td colspan="5" class="p-4 text-center text-slate-400">Sin datos registrados aún.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Footer -->
+        <footer class="mt-12 text-center text-xs text-slate-400 py-4 border-t border-slate-200">
+            <p>Río Inteligente • Sistema de Telemetría Ambiental • UNEMI 2026</p>
+        </footer>
+
+    </div>
+
+    <!-- Script Lógica JavaScript -->
+    <script>
+        // Data Global de Zonas
+        const zonas = [
+            { id: 1, nombre: "Zona 1 (Alta)", ph: 0, turb: 0, tds: 0, ica: 0, estado: "SIN DATO", evaluado: false },
+            { id: 2, nombre: "Zona 2 (Media)", ph: 0, turb: 0, tds: 0, ica: 0, estado: "SIN DATO", evaluado: false },
+            { id: 3, nombre: "Zona 3 (Baja)", ph: 0, turb: 0, tds: 0, ica: 0, estado: "SIN DATO", evaluado: false }
+        ];
+        let zonaActivaIdx = 0;
+        let historialData = [];
+        let simInterval = null;
+        let client = null;
+
+        // Inicializar Chart.js
+        const ctx = document.getElementById('chartEvolucion').getContext('2d');
+        const chartEvolucion = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'pH', data: [], borderColor: '#10b981', backgroundColor: '#10b98120', tension: 0.3 },
+                    { label: 'Turbidez (NTU)', data: [], borderColor: '#06b6d4', backgroundColor: '#06b6d420', tension: 0.3 },
+                    { label: 'ICA', data: [], borderColor: '#0284c7', borderWidth: 3, tension: 0.3 }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'bottom' } },
+                scales: {
+                    y: { beginAtZero: true, grid: { color: '#f1f5f9' } },
+                    x: { grid: { display: false } }
+                }
+            }
+        });
+
+        // Configuración e Iniciar MQTT WebSockets
+        function initMQTT() {
+            const broker = "broker.hivemq.com";
+            const port = 8000;
+            const topic = "rio/inteligente/datos";
+            const clientId = "WebClient-UNEMI-" + Math.floor(Math.random() * 10000);
+
+            client = new Paho.MQTT.Client(broker, port, clientId);
+
+            client.onConnectionLost = function (response) {
+                document.getElementById("mqttStatus").className = "flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-50 text-red-700 border border-red-200 text-xs font-semibold";
+                document.getElementById("mqttStatusText").innerText = "Desconectado";
+            };
+          
+
+            client.onMessageArrived = function (message) {
+                try {
+                    const data = JSON.parse(message.payloadString);
+                    procesarDatosEntrantes(data);
+                } catch (e) {
+                    console.error("Error leyendo JSON MQTT:", e);
+                }
+            };
+
+            client.connect({
+                onSuccess: function () {
+                    document.getElementById("mqttStatus").className = "flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold";
+                    document.getElementById("mqttStatusText").innerText = "MQTT Conectado";
+                    client.subscribe(topic);
+                },
+                onFailure: function () {
+                    document.getElementById("mqttStatusText").innerText = "Fallo de conexión";
+                }
+            });
+        }
+
+        // Procesar datos leídos
+        function procesarDatosEntrantes(data) {
+            const zIdx = (data.zona - 1) % 3;
+            zonas[zIdx] = {
+                id: data.zona,
+                nombre: `Zona ${data.zona}`,
+                ph: parseFloat(data.ph),
+                turb: parseFloat(data.turbidez),
+                tds: parseFloat(data.tds),
+                ica: parseFloat(data.ica),
+                estado: data.estado,
+                evaluado: true
+            };
+
+            // Guardar en Histórico
+            const hora = new Date().toLocaleTimeString();
+            historialData.unshift({ hora, zona: data.zona, ph: data.ph, turb: data.turbidez, ica: data.ica, estado: data.estado });
+            if (historialData.length > 20) historialData.pop();
+
+            // Actualizar Chart
+            chartEvolucion.data.labels.push(hora);
+            chartEvolucion.data.datasets[0].data.push(data.ph);
+            chartEvolucion.data.datasets[1].data.push(data.turbidez);
+            chartEvolucion.data.datasets[2].data.push(data.ica);
+            if (chartEvolucion.data.labels.length > 10) {
+                chartEvolucion.data.labels.shift();
+                chartEvolucion.data.datasets.forEach(ds => ds.data.shift());
+            }
+            chartEvolucion.update();
+
+            // Refrescar UI
+            actualizarBadges();
+            actualizarTabla();
+            seleccionarZona(zIdx);
+        }
+
+        // Seleccionar Zona Activa en Pantalla
+        function seleccionarZona(idx) {
+            zonaActivaIdx = idx;
+            for (let i = 0; i < 3; i++) {
+                const btn = document.getElementById(`btnZona${i}`);
+                if (i === idx) {
+                    btn.className = "glass-card p-4 rounded-xl border-l-4 border-brand-500 text-left transition-all hover:shadow-md relative overflow-hidden group";
+                } else {
+                    btn.className = "glass-card p-4 rounded-xl border-l-4 border-slate-300 text-left transition-all hover:shadow-md relative overflow-hidden group opacity-75";
+                }
+            }
+
+            const z = zonas[idx];
+            document.getElementById("valPH").innerText = z.evaluado ? z.ph.toFixed(2) : "--";
+            document.getElementById("valTurb").innerText = z.evaluado ? z.turb.toFixed(1) : "--";
+            document.getElementById("valTDS").innerText = z.evaluado ? z.tds.toFixed(0) : "--";
+            document.getElementById("valICA").innerText = z.evaluado ? z.ica.toFixed(1) : "--";
+
+            // Animación Barras de Progreso
+            document.getElementById("barPH").style.width = z.evaluado ? `${(z.ph / 14) * 100}%` : "0%";
+            document.getElementById("barTurb").style.width = z.evaluado ? `${Math.min((z.turb / 500) * 100, 100)}%` : "0%";
+            document.getElementById("barTDS").style.width = z.evaluado ? `${Math.min((z.tds / 1000) * 100, 100)}%` : "0%";
+
+            // Animación Gauge Circular ICA
+            const arc = document.getElementById("gaugeArc");
+            if (z.evaluado) {
+                const offset = 440 - (440 * (z.ica / 100));
+                arc.style.strokeDashoffset = offset;
+                arc.style.stroke = z.ica >= 80 ? "#10b981" : (z.ica >= 50 ? "#f59e0b" : "#ef4444");
+            } else {
+                arc.style.strokeDashoffset = 440;
+            }
+
+            // Semáforo LED y Diagnóstico
+            actualizarSemaforo(z.estado);
+            actualizarDiagnosticoTexto(z);
+        }
+
+        function actualizarSemaforo(estado) {
+            const v = document.getElementById("ledVerde");
+            const a = document.getElementById("ledAmarillo");
+            const r = document.getElementById("ledRojo");
+            v.className = "w-4 h-4 rounded-full bg-slate-300 transition-all duration-300";
+            a.className = "w-4 h-4 rounded-full bg-slate-300 transition-all duration-300";
+            r.className = "w-4 h-4 rounded-full bg-slate-300 transition-all duration-300";
+
+            if (estado === "NORMAL") v.className = "w-4 h-4 rounded-full bg-emerald-500 shadow-lg shadow-emerald-500/50 animate-pulse";
+            if (estado === "ALERTA") a.className = "w-4 h-4 rounded-full bg-amber-500 shadow-lg shadow-amber-500/50 animate-pulse";
+            if (estado === "CRITICO") r.className = "w-4 h-4 rounded-full bg-red-500 shadow-lg shadow-red-500/50 animate-pulse";
+        }
+
+        function actualizarDiagnosticoTexto(z) {
+            const lbl = document.getElementById("lblICA");
+            const txt = document.getElementById("diagTexto");
+            if (!z.evaluado) {
+                lbl.innerText = "Sin Datos";
+                lbl.className = "text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-slate-100 text-slate-600 mt-2";
+                txt.innerText = "Esperando la transmisión de datos desde el microcontrolador ESP32 para esta zona.";
+                return;
+            }
+
+            lbl.innerText = z.estado;
+            if (z.estado === "NORMAL") {
+                lbl.className = "text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 mt-2";
+                txt.innerHTML = `<strong>Calidad Aceptable (ICA: ${z.ica.toFixed(1)}):</strong> Los parámetros evaluados en la ${z.nombre} cumplen con los límites permisibles establecidos por el TULSMA para conservación de flora y fauna acuática.`;
+            } else if (z.estado === "ALERTA") {
+                lbl.className = "text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-amber-100 text-amber-700 mt-2";
+                txt.innerHTML = `<strong>Atención Requerida (ICA: ${z.ica.toFixed(1)}):</strong> Se observan desviaciones moderadas en la ${z.nombre}. Posible incremento de sedimento o vertimientos orgánicos puntuales.`;
+            } else {
+                lbl.className = "text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-red-100 text-red-700 mt-2";
+                txt.innerHTML = `<strong>Estado Crítico (ICA: ${z.ica.toFixed(1)}):</strong> Parámetros fuera de norma en la ${z.nombre}. Riesgo para el ecosistema fluvial. Se recomienda la inspección técnica inmediata del sector.`;
+            }
+        }
+
+        function actualizarBadges() {
+            zonas.forEach((z, i) => {
+                const b = document.getElementById(`badgeZ${i}`);
+                if (z.evaluado) {
+                    b.innerText = z.estado;
+                    b.className = z.estado === "NORMAL" ? "text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-700" : (z.estado === "ALERTA" ? "text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-700" : "text-[10px] font-bold px-2 py-0.5 rounded bg-red-100 text-red-700");
+                }
+            });
+        }
+
+        function actualizarTabla() {
+            const tb = document.getElementById("tablaCuerpo");
+            if (historialData.length === 0) return;
+            tb.innerHTML = historialData.map(h => `
+                <tr>
+                    <td class="p-2 font-semibold">P${h.zona}</td>
+                    <td class="p-2">${parseFloat(h.ph).toFixed(2)}</td>
+                    <td class="p-2">${parseFloat(h.turb).toFixed(1)}</td>
+                    <td class="p-2 font-bold">${parseFloat(h.ica).toFixed(1)}</td>
+                    <td class="p-2"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${h.estado === 'NORMAL' ? 'bg-emerald-100 text-emerald-700' : (h.estado === 'ALERTA' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700')}">${h.estado}</span></td>
+                </tr>
+            `).join('');
+        }
+
+        function toggleSimulación() {
+            const check = document.getElementById("simToggle").checked;
+            if (check) {
+                simInterval = setInterval(() => {
+                    const zRandom = Math.floor(Math.random() * 3) + 1;
+                    const ph = (6.0 + Math.random() * 3.2);
+                    const turb = (Math.random() * 80);
+                    const tds = (100 + Math.random() * 550);
+                    const ica = Math.max(10, 100 - (Math.abs(7.5 - ph) * 10 + turb * 0.5 + tds * 0.05));
+                    const estado = ica >= 80 ? "NORMAL" : (ica >= 50 ? "ALERTA" : "CRITICO");
+
+                    procesarDatosEntrantes({ zona: zRandom, ph, turbidez: turb, tds, ica, estado });
+                }, 3000);
+            } else {
+                clearInterval(simInterval);
+            }
+        }
+
+        function exportarCSV() {
+            if (historialData.length === 0) return alert("No hay datos para exportar.");
+            let csv = "Hora,Zona,pH,Turbidez(NTU),ICA,Estado\n";
+            historialData.forEach(r => {
+                csv += `${r.hora},Zona ${r.zona},${r.ph},${r.turb},${r.ica},${r.estado}\n`;
+            });
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.setAttribute('href', url);
+            a.setAttribute('download', 'Reporte_Rio_Inteligente.csv');
+            a.click();
+        }
+
+        // Animación de fondo suave en Canvas
+        const canvas = document.getElementById("fluidBg");
+        const ctxBg = canvas.getContext("2d");
+        let particles = [];
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener("resize", resizeCanvas);
+        resizeCanvas();
+
+        for (let i = 0; i < 25; i++) {
+            particles.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                radius: Math.random() * 3 + 1,
+                vy: -Math.random() * 0.5 - 0.2,
+                alpha: Math.random() * 0.3 + 0.1
+            });
+        }
+
+        function animateCanvas() {
+            ctxBg.clearRect(0, 0, canvas.width, canvas.height);
+            particles.forEach(p => {
+                p.y += p.vy;
+                if (p.y < 0) p.y = canvas.height;
+                ctxBg.beginPath();
+                ctxBg.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctxBg.fillStyle = `rgba(2, 132, 199, ${p.alpha})`;
+                ctxBg.fill();
+            });
+            requestAnimationFrame(animateCanvas);
+        }
+        animateCanvas();
+
+        // Iniciar cliente MQTT al cargar
+        window.onload = initMQTT;
+    </script>
+</body>
+</html>
